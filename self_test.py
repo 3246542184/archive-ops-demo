@@ -167,6 +167,31 @@ def main():
         expect("空清单应返回未检测(None)", ok is None, text)
         expect("消息里应说明没有登记任何安装包", "没有登记任何安装包" in text, text)
 
+        print("== 3h. 端到端:空清单必须一路走到[未检测],且退出码为 0 ==")
+        e2e = os.path.join(tmp, "e2e-empty")
+        src_e = os.path.join(e2e, "src")
+        bak_e = os.path.join(e2e, "bak")
+        role_e = os.path.join(e2e, "role")
+        os.makedirs(src_e, exist_ok=True)
+        os.makedirs(bak_e, exist_ok=True)
+        os.makedirs(role_e, exist_ok=True)
+        io.open(os.path.join(src_e, "a.md"), "w", encoding="utf-8").write("# 标题\n\n正文\n")
+        io.open(os.path.join(bak_e, "a.md"), "w", encoding="utf-8").write("# 标题\n\n正文\n")
+        make_manifest(role_e, [])
+        buf = io.StringIO()
+        old_out = sys.stdout
+        sys.stdout = buf
+        try:
+            rc = check_all.main(["--source", src_e, "--backup", bak_e,
+                                 "--rollback", role_e, "--docs", src_e, "--git-root", src_e])
+        finally:
+            sys.stdout = old_out
+        out = buf.getvalue()
+        expect("空清单场景退出码应为 0(没有失败项)", rc == 0, "rc=%r" % rc)
+        expect("汇总应写明有未检测项", "未检测" in out.splitlines()[-1], out.splitlines()[-1] if out else "")
+        expect("汇总不应写成全部通过", "全部通过" not in out, out[-120:])
+        expect("回滚那行应说明没有登记任何安装包", "没有登记任何安装包" in out, out[:200])
+
         print("== 4. 回滚清单路径越界 ==")
         role2 = os.path.join(tmp, "rollback-escape")
         os.makedirs(role2, exist_ok=True)
