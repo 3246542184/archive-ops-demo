@@ -159,6 +159,14 @@ def main():
         expect("遍历出错时应返回未检测(None)", ok is None, text)
         expect("消息里应说明结论不可信", "不可信" in text, text)
 
+        print("== 3g. 空清单应判未检测,不能看起来像[已通过] ==")
+        role_empty = os.path.join(tmp, "rollback-empty")
+        os.makedirs(role_empty, exist_ok=True)
+        make_manifest(role_empty, [])
+        ok, text = check_all.check_rollback(role_empty)
+        expect("空清单应返回未检测(None)", ok is None, text)
+        expect("消息里应说明没有登记任何安装包", "没有登记任何安装包" in text, text)
+
         print("== 4. 回滚清单路径越界 ==")
         role2 = os.path.join(tmp, "rollback-escape")
         os.makedirs(role2, exist_ok=True)

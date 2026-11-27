@@ -162,6 +162,8 @@ def check_rollback(root: str) -> tuple[bool, str]:
     entries = data.get("installers") or []
     if not isinstance(entries, list):
         return False, "[回滚] installers 必须是数组,实际是 %s" % type(entries).__name__
+    if not entries:
+        return None, "[回滚] 未检测:清单里没有登记任何安装包,无法判断回滚资源是否齐全"
     bad_items = [i for i, item in enumerate(entries) if not isinstance(item, dict)]
     if bad_items:
         return False, "[回滚] installers 第 %s 项不是对象,清单结构不合法" % (
