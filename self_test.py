@@ -178,19 +178,38 @@ def main():
         io.open(os.path.join(src_e, "a.md"), "w", encoding="utf-8").write("# 标题\n\n正文\n")
         io.open(os.path.join(bak_e, "a.md"), "w", encoding="utf-8").write("# 标题\n\n正文\n")
         make_manifest(role_e, [])
+        # 让 Git 检查"确定通过":造一个干净的临时仓库。
+        # 否则 git-root 指向普通临时目录,它也会返回未检测 —— 那样就有两项未检测,
+        # 3h 就不是"只隔离空回滚清单这一项"的场景了。
+        git_ok = git_available()
+        git_root = os.path.join(e2e, "gitrepo")
+        if git_ok:
+            os.makedirs(git_root, exist_ok=True)
+            io.open(os.path.join(git_root, "tracked.txt"), "w", encoding="utf-8").write("已提交\n")
+            for cmd in (["init", "-q"],
+                        ["add", "tracked.txt"],
+                        ["-c", "user.name=self-test", "-c", "user.email=self-test@example.invalid",
+                         "commit", "-q", "-m", "init"]):
+                subprocess.run(["git", "-C", git_root] + cmd, capture_output=True, timeout=30)
+
         buf = io.StringIO()
         old_out = sys.stdout
         sys.stdout = buf
         try:
             rc = check_all.main(["--source", src_e, "--backup", bak_e,
-                                 "--rollback", role_e, "--docs", src_e, "--git-root", src_e])
+                                 "--rollback", role_e, "--docs", src_e,
+                                 "--git-root", git_root if git_ok else src_e])
         finally:
             sys.stdout = old_out
         out = buf.getvalue()
+        last = out.splitlines()[-1] if out else ""
         expect("空清单场景退出码应为 0(没有失败项)", rc == 0, "rc=%r" % rc)
-        expect("汇总应写明有未检测项", "未检测" in out.splitlines()[-1], out.splitlines()[-1] if out else "")
         expect("汇总不应写成全部通过", "全部通过" not in out, out[-120:])
         expect("回滚那行应说明没有登记任何安装包", "没有登记任何安装包" in out, out[:200])
+        if git_ok:
+            expect("汇总应恰为[无失败项 · 1 项未检测](只有空清单这一项)", last == "结果: 无失败项 · 1 项未检测", last)
+        else:
+            skip("3h 的精确计数断言", "本机没有 git,无法构造干净的临时仓库")
 
         print("== 4. 回滚清单路径越界 ==")
         role2 = os.path.join(tmp, "rollback-escape")
