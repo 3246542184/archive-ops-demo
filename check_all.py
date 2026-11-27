@@ -41,10 +41,21 @@ def sha256_of(path: str) -> str:
     return h.hexdigest()
 
 
-def walk_files(root: str) -> dict[str, str]:
-    """返回 {相对路径: 绝对路径}。"""
+def walk_files(root: str, errors: list[str] | None = None) -> dict[str, str]:
+    """返回 {相对路径: 绝对路径}。
+
+    errors 不为 None 时,遍历错误(权限不足、路径消失等)会记进去。
+    os.walk 默认静默跳过读不了的目录 —— 对一个"证明备份忠实"的工具来说,
+    "没看见"不能等于"没问题",所以这里把错误显式交回调用方。
+    """
     out = {}
-    for dirpath, dirs, files in os.walk(root):
+    if errors is None:
+        errors = []
+
+    def _on_error(exc: OSError) -> None:
+        errors.append("%s: %s" % (getattr(exc, "filename", "?"), exc.strerror or exc))
+
+    for dirpath, dirs, files in os.walk(root, onerror=_on_error):
         dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git")]
         for name in files:
             full = os.path.join(dirpath, name)
@@ -55,9 +66,15 @@ def walk_files(root: str) -> dict[str, str]:
 def check_backup(source: str, backup: str) -> tuple[bool, str]:
     """逐个文件比大小与 SHA-256。缺文件、不一致算失败;备份里多出的文件只统计,不算失败。"""
     if not os.path.isdir(source) or not os.path.isdir(backup):
-        return False, "[备份] 目录不存在,跳过"
-    src = walk_files(source)
-    bak = walk_files(backup)
+        return None, "[备份] 未检测:源目录或备份目录不存在"
+    walk_errors: list[str] = []
+    src = walk_files(source, walk_errors)
+    bak = walk_files(backup, walk_errors)
+    if walk_errors:
+        text = "[备份] 未检测:有 %d 处目录无法读取,本次结论不可信" % len(walk_errors)
+        for e in walk_errors[:10]:
+            text += "\n        无法读取: %s" % e
+        return None, text
     same = 0
     missing, differing = [], []
     for rel, full in sorted(src.items()):
@@ -84,10 +101,11 @@ def check_backup(source: str, backup: str) -> tuple[bool, str]:
 def check_docs(root: str) -> tuple[bool, str]:
     """结构检查,范围有限:末尾换行、前五行有标题、代码围栏成对。不检查内容正确性。"""
     if not os.path.isdir(root):
-        return False, "[文档] 目录不存在,跳过"
+        return None, "[文档] 未检测:目录不存在"
     total = failed = 0
     problems = []
-    for rel, full in sorted(walk_files(root).items()):
+    walk_errors: list[str] = []
+    for rel, full in sorted(walk_files(root, walk_errors).items()):
         if not rel.lower().endswith(".md"):
             continue
         total += 1
@@ -104,6 +122,11 @@ def check_docs(root: str) -> tuple[bool, str]:
         if reasons:
             failed += 1
             problems.append("%s: %s" % (rel, "、".join(reasons)))
+    if walk_errors:
+        text = "[文档] 未检测:有 %d 处目录无法读取,本次结论不可信" % len(walk_errors)
+        for e in walk_errors[:10]:
+            text += "\n        无法读取: %s" % e
+        return None, text
     if total == 0:
         return None, "[文档] 未检测:目录里没有 Markdown 文件"
     out = "[文档] 结构检查 %d 篇 · 通过 %d · 失败 %d(只查格式,不查内容)" % (
@@ -128,10 +151,21 @@ def check_rollback(root: str) -> tuple[bool, str]:
     """manifest.json 登记的安装包:存在、路径在目录内、且哈希匹配才算合格。"""
     manifest = os.path.join(root, "manifest.json")
     if not os.path.isfile(manifest):
-        return False, "[回滚] 找不到 manifest.json,跳过"
-    with open(manifest, encoding="utf-8") as f:
-        data = json.load(f)
+        return None, "[回滚] 未检测:这个目录里没有 manifest.json"
+    try:
+        with open(manifest, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        return False, "[回滚] 清单无法解析: %s: %s" % (type(exc).__name__, exc)
+    if not isinstance(data, dict):
+        return False, "[回滚] 清单顶层必须是对象,实际是 %s" % type(data).__name__
     entries = data.get("installers") or []
+    if not isinstance(entries, list):
+        return False, "[回滚] installers 必须是数组,实际是 %s" % type(entries).__name__
+    bad_items = [i for i, item in enumerate(entries) if not isinstance(item, dict)]
+    if bad_items:
+        return False, "[回滚] installers 第 %s 项不是对象,清单结构不合法" % (
+            "、".join(str(i + 1) for i in bad_items[:5]))
     ok = missing = nohash = bad = unsafe = 0
     detail = []
     for item in entries:

@@ -114,6 +114,51 @@ def main():
         expect("空目录应返回未检测(None)", ok is None, text)
         expect("消息里应说明没有 Markdown 文件", "没有 Markdown 文件" in text, text)
 
+        print("== 3c. 清单结构不合法应判失败,而不是抛异常 ==")
+        role_bad = os.path.join(tmp, "rollback-badstruct")
+        os.makedirs(role_bad, exist_ok=True)
+        io.open(os.path.join(role_bad, "manifest.json"), "w", encoding="utf-8").write(
+            '{"installers": ["tool-1.0.bin"]}\n')
+        ok, text = check_all.check_rollback(role_bad)
+        expect("条目不是对象时应判失败", ok is False, text)
+        expect("消息里应说明结构不合法", "结构不合法" in text, text)
+
+        print("== 3d. 清单 JSON 损坏应判失败,而不是抛异常 ==")
+        role_broken = os.path.join(tmp, "rollback-brokenjson")
+        os.makedirs(role_broken, exist_ok=True)
+        io.open(os.path.join(role_broken, "manifest.json"), "w", encoding="utf-8").write("{installers: [}\n")
+        ok, text = check_all.check_rollback(role_broken)
+        expect("损坏的 JSON 应判失败", ok is False, text)
+        expect("消息里应说明无法解析", "无法解析" in text, text)
+
+        print("== 3e. 目录不存在应判未检测,而不是失败 ==")
+        ok, text = check_all.check_backup(os.path.join(tmp, "nope-src"), os.path.join(tmp, "nope-bak"))
+        expect("备份目录不存在应返回未检测(None)", ok is None, text)
+        ok, text = check_all.check_rollback(os.path.join(tmp, "nope-role"))
+        expect("回滚目录没有清单应返回未检测(None)", ok is None, text)
+
+        print("== 3f. 遍历出错(权限/路径消失)时不得报告一致 ==")
+        src_err = os.path.join(tmp, "err-src")
+        bak_err = os.path.join(tmp, "err-bak")
+        os.makedirs(src_err, exist_ok=True)
+        os.makedirs(bak_err, exist_ok=True)
+        io.open(os.path.join(src_err, "a.txt"), "w", encoding="utf-8").write("a\n")
+        io.open(os.path.join(bak_err, "a.txt"), "w", encoding="utf-8").write("a\n")
+        # 本来会判"一致 1 个";人为让 os.walk 报一次错,应当改口说"未检测"
+        real_walk = check_all.os.walk
+
+        def failing_walk(root, onerror=None, **kwargs):
+            if onerror is not None:
+                onerror(OSError(13, "Permission denied", str(root)))
+            return iter(())
+        check_all.os.walk = failing_walk
+        try:
+            ok, text = check_all.check_backup(src_err, bak_err)
+        finally:
+            check_all.os.walk = real_walk
+        expect("遍历出错时应返回未检测(None)", ok is None, text)
+        expect("消息里应说明结论不可信", "不可信" in text, text)
+
         print("== 4. 回滚清单路径越界 ==")
         role2 = os.path.join(tmp, "rollback-escape")
         os.makedirs(role2, exist_ok=True)
